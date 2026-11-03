@@ -205,6 +205,7 @@ struct VirtMachineState {
     char *oem_id;
     char *oem_table_id;
     bool ns_el2_virt_timer_irq;
+    bool uart1_reserved; /* Used by local MCU composition. */
     CXLState cxl_devices_state;
     bool legacy_smmuv3_present;
     MemoryRegion *sysmem;

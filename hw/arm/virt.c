@@ -3182,7 +3182,7 @@ static void machvirt_init(MachineState *machine)
      * we create it second (and so it appears first in the DTB), because
      * that's what QEMU has always done.
      */
-    if (!vms->secure) {
+    if (!vms->secure && !vms->uart1_reserved) {
         Chardev *serial1 = serial_hd(1);
 
         if (serial1) {

@@ -13,7 +13,13 @@
 #elif defined(TARGET_RISCV32)
 # define TARGET_VIRT_ADDR_SPACE_BITS 32 /* sv32 */
 #endif
+#if defined(CONFIG_HETERO_PROTOTYPE) && !defined(CONFIG_USER_ONLY)
+/* Internal TCG granule; architectural RISC-V pages still use PGSHIFT. */
+#define TARGET_PAGE_BITS_VARY
+#define TARGET_PAGE_BITS_LEGACY 12
+#else
 #define TARGET_PAGE_BITS 12 /* 4 KiB Pages */
+#endif
 
 /*
  * The current MMU Modes are:

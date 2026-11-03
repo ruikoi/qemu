@@ -1507,7 +1507,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
     napot_mask = (1 << napot_bits) - 1;
     *physical = (((ppn & ~napot_mask) | (vpn & napot_mask) |
                   (vpn & (((target_ulong)1 << ptshift) - 1))
-                 ) << PGSHIFT) | (addr & ~TARGET_PAGE_MASK);
+                 ) << PGSHIFT) | (addr & ((1ULL << PGSHIFT) - 1));
 
     /*
      * Remove write permission unless this is a store, or the page is
@@ -1753,7 +1753,7 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
                 if (ret != TRANSLATE_PMP_FAIL) {
                     env->guest_phys_fault_addr = (im_address |
                                                   (address &
-                                                   (TARGET_PAGE_SIZE - 1))) >> 2;
+                                                   ((1ULL << PGSHIFT) - 1))) >> 2;
                 }
             }
         }

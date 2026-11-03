@@ -22,6 +22,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "system/address-spaces.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
@@ -371,10 +372,10 @@ static const TypeInfo riscv_aclint_mtimer_info = {
 /*
  * Create ACLINT MTIMER device.
  */
-DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
-    uint32_t hartid_base, uint32_t num_harts,
-    uint32_t timecmp_base, uint32_t time_base, uint32_t timebase_freq,
-    bool provide_rdtime)
+DeviceState *riscv_aclint_mtimer_create_with_memory(
+    MemoryRegion *memory, hwaddr addr, hwaddr size, uint32_t hartid_base,
+    uint32_t num_harts, uint32_t timecmp_base, uint32_t time_base, uint32_t
+    timebase_freq, bool provide_rdtime)
 {
     int i;
     DeviceState *dev = qdev_new(TYPE_RISCV_ACLINT_MTIMER);
@@ -392,7 +393,8 @@ DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
     qdev_prop_set_uint32(dev, "aperture-size", size);
     qdev_prop_set_uint32(dev, "timebase-freq", timebase_freq);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    memory_region_add_subregion(memory, addr,
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0));
 
     for (i = 0; i < num_harts; i++) {
         CPUState *cpu = cpu_by_arch_id(hartid_base + i);
@@ -556,8 +558,9 @@ static const TypeInfo riscv_aclint_swi_info = {
 /*
  * Create ACLINT [M|S]SWI device.
  */
-DeviceState *riscv_aclint_swi_create(hwaddr addr, uint32_t hartid_base,
-    uint32_t num_harts, bool sswi)
+DeviceState *riscv_aclint_swi_create_with_memory(
+    MemoryRegion *memory, hwaddr addr, uint32_t hartid_base, uint32_t
+    num_harts, bool sswi)
 {
     int i;
     DeviceState *dev = qdev_new(TYPE_RISCV_ACLINT_SWI);
@@ -569,7 +572,8 @@ DeviceState *riscv_aclint_swi_create(hwaddr addr, uint32_t hartid_base,
     qdev_prop_set_uint32(dev, "num-harts", num_harts);
     qdev_prop_set_uint32(dev, "sswi", sswi ? true : false);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    memory_region_add_subregion(memory, addr,
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0));
 
     for (i = 0; i < num_harts; i++) {
         CPUState *cpu = cpu_by_arch_id(hartid_base + i);
@@ -594,3 +598,21 @@ static void riscv_aclint_register_types(void)
 }
 
 type_init(riscv_aclint_register_types)
+
+
+DeviceState *riscv_aclint_mtimer_create(hwaddr addr, hwaddr size,
+    uint32_t hartid_base, uint32_t num_harts,
+    uint32_t timecmp_base, uint32_t time_base, uint32_t timebase_freq,
+    bool provide_rdtime)
+{
+    return riscv_aclint_mtimer_create_with_memory(
+        get_system_memory(), addr, size, hartid_base, num_harts,
+        timecmp_base, time_base, timebase_freq, provide_rdtime);
+}
+
+DeviceState *riscv_aclint_swi_create(hwaddr addr, uint32_t hartid_base,
+    uint32_t num_harts, bool sswi)
+{
+    return riscv_aclint_swi_create_with_memory(
+        get_system_memory(), addr, hartid_base, num_harts, sswi);
+}

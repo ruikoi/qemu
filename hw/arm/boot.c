@@ -1108,6 +1108,10 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
     info->is_linux = is_linux;
 
     for (cs = first_cpu; cs; cs = CPU_NEXT(cs)) {
+        if (!object_dynamic_cast(OBJECT(cs), TYPE_ARM_CPU) ||
+            (info->domain_memory && cs->memory != info->domain_memory)) {
+            continue;
+        }
         ARM_CPU(cs)->env.boot_info = info;
     }
 }
@@ -1190,6 +1194,10 @@ void arm_load_kernel(ARMCPU *cpu, MachineState *ms, struct arm_boot_info *info)
      * arranging that we start it correctly.
      */
     for (cs = first_cpu; cs; cs = CPU_NEXT(cs)) {
+        if (!object_dynamic_cast(OBJECT(cs), TYPE_ARM_CPU) ||
+            (info->domain_memory && cs->memory != info->domain_memory)) {
+            continue;
+        }
         qemu_register_reset(do_cpu_reset, ARM_CPU(cs));
         nb_cpus++;
     }
@@ -1255,6 +1263,10 @@ void arm_load_kernel(ARMCPU *cpu, MachineState *ms, struct arm_boot_info *info)
 
     if (info->psci_conduit != QEMU_PSCI_CONDUIT_DISABLED) {
         for (cs = first_cpu; cs; cs = CPU_NEXT(cs)) {
+            if (!object_dynamic_cast(OBJECT(cs), TYPE_ARM_CPU) ||
+                (info->domain_memory && cs->memory != info->domain_memory)) {
+                continue;
+            }
             Object *cpuobj = OBJECT(cs);
 
             object_property_set_int(cpuobj, "psci-conduit", info->psci_conduit,

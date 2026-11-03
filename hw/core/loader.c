@@ -1582,6 +1582,50 @@ void *rom_ptr(hwaddr addr, size_t size)
     return rom->data + (addr - rom->addr);
 }
 
+#ifdef CONFIG_HETERO_PROTOTYPE
+/* Match backing memory, since different CPUs may use identical guest addresses. */
+void *rom_ptr_for_as(AddressSpace *as, hwaddr addr, size_t size)
+{
+    MemoryRegion *query_mr;
+    hwaddr query_offset, query_len = size;
+    Rom *rom;
+
+    RCU_READ_LOCK_GUARD();
+    query_mr = flatview_translate(address_space_to_flatview(as), addr,
+                                 &query_offset, &query_len, false,
+                                 MEMTXATTRS_UNSPECIFIED);
+    if (!query_mr || query_len < size) {
+        return NULL;
+    }
+    QTAILQ_FOREACH(rom, &roms, next) {
+        MemoryRegion *source_mr;
+        hwaddr source_offset, source_len = rom->datasize;
+        hwaddr offset;
+
+        if (rom->fw_file || !rom->data) {
+            continue;
+        }
+        if (rom->mr) {
+            source_mr = rom->mr;
+            source_offset = rom->addr;
+        } else {
+            AddressSpace *source_as = rom->as ?: &address_space_memory;
+            source_mr = flatview_translate(address_space_to_flatview(source_as),
+                                          rom->addr, &source_offset,
+                                          &source_len, false,
+                                          MEMTXATTRS_UNSPECIFIED);
+        }
+        if (source_mr != query_mr || query_offset < source_offset) {
+            continue;
+        }
+        offset = query_offset - source_offset;
+        if (offset <= source_len && size <= source_len - offset) {
+            return rom->data + offset;
+        }
+    }
+    return NULL;
+}
+#else
 typedef struct FindRomCBData {
     size_t size; /* Amount of data we want from ROM, in bytes */
     MemoryRegion *mr; /* MR at the unaliased guest addr */
@@ -1656,6 +1700,8 @@ void *rom_ptr_for_as(AddressSpace *as, hwaddr addr, size_t size)
     flatview_for_each_range(fv, find_rom_cb, &cbdata);
     return cbdata.rom;
 }
+
+#endif
 
 HumanReadableText *qmp_x_query_roms(Error **errp)
 {

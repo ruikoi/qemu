@@ -39,6 +39,8 @@ void armv7m_load_kernel(ARMCPU *cpu, const char *kernel_filename,
 /* arm_boot.c */
 struct arm_boot_info {
     uint64_t ram_size;
+    /* Optional private CPU memory root: restrict boot setup to this domain. */
+    MemoryRegion *domain_memory;
     const char *shim_filename;
     const char *kernel_filename;
     const char *kernel_cmdline;

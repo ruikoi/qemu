@@ -4522,7 +4522,7 @@ if get_option('hetero_prototype')
     error('hetero_prototype requires exactly aarch64-softmmu,riscv64-softmmu')
   endif
   hetero_name = host_os == 'darwin' ? 'qemu-system-hetero-unsigned' : 'qemu-system-hetero'
-  hetero_exe = executable(hetero_name, files('system/main.c'),
+  hetero_exe = executable(hetero_name, files('system/main.c', 'hw/multiarch/prototype.c'),
     objects: multi_target_objects,
     dependencies: multi_target_deps + [sdl],
     link_depends: [block_syms, qemu_syms],

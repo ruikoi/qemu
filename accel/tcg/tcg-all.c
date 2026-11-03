@@ -144,6 +144,13 @@ static int tcg_init_machine(AccelState *as, MachineState *ms)
         g_assert_not_reached();
     }
 
+#ifdef CONFIG_HETERO_PROTOTYPE
+    /* The basic multiarch machine has two independent CPU domains. */
+    if (qemu_tcg_mttcg_enabled()) {
+        max_threads = MAX(max_threads, 2);
+    }
+#endif
+
     qemu_add_vm_change_state_handler(tcg_vm_change_state, NULL);
 #endif
 

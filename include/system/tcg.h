@@ -17,6 +17,9 @@ extern bool tcg_allowed;
 #define tcg_enabled() 0
 #endif
 
+/* Prepare all translators before starting vCPU threads. */
+void tcg_exec_initialize_target(CPUState *cpu);
+
 /**
  * qemu_tcg_mttcg_enabled:
  * Check whether we are running MultiThread TCG or not.

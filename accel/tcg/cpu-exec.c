@@ -1050,25 +1050,33 @@ int cpu_exec(CPUState *cpu)
     return ret;
 }
 
+void tcg_exec_initialize_target(CPUState *cpu)
+{
+    static GSList *initialized;
+    const TCGCPUOps *tcg_ops = cpu->cc->tcg_ops;
+
+    for (GSList *it = initialized; it; it = it->next) {
+        const TCGCPUOps *previous = it->data;
+        if (previous->initialize == tcg_ops->initialize) {
+            return;
+        }
+    }
+#ifndef CONFIG_USER_ONLY
+    assert(tcg_ops->cpu_exec_halt);
+    assert(tcg_ops->cpu_exec_interrupt);
+    assert(tcg_ops->cpu_exec_reset);
+    assert(tcg_ops->pointer_wrap);
+#endif
+    assert(tcg_ops->translate_code);
+    assert(tcg_ops->get_tb_cpu_state);
+    assert(tcg_ops->mmu_index);
+    tcg_ops->initialize();
+    initialized = g_slist_prepend(initialized, (void *)tcg_ops);
+}
+
 bool tcg_exec_realizefn(CPUState *cpu, Error **errp)
 {
-    static bool tcg_target_initialized;
-
-    if (!tcg_target_initialized) {
-        /* Check mandatory TCGCPUOps handlers */
-        const TCGCPUOps *tcg_ops = cpu->cc->tcg_ops;
-#ifndef CONFIG_USER_ONLY
-        assert(tcg_ops->cpu_exec_halt);
-        assert(tcg_ops->cpu_exec_interrupt);
-        assert(tcg_ops->cpu_exec_reset);
-        assert(tcg_ops->pointer_wrap);
-#endif /* !CONFIG_USER_ONLY */
-        assert(tcg_ops->translate_code);
-        assert(tcg_ops->get_tb_cpu_state);
-        assert(tcg_ops->mmu_index);
-        tcg_ops->initialize();
-        tcg_target_initialized = true;
-    }
+    tcg_exec_initialize_target(cpu);
 
     cpu->tb_jmp_cache = g_new0(CPUJumpCache, 1);
     tlb_init(cpu);

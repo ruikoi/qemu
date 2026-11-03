@@ -6668,6 +6668,17 @@ SRST
 ERST
 
 
+
+DEF("domain", HAS_ARG, QEMU_OPTION_domain,
+    "-domain id=ID,platform=TYPE,cpu=MODEL,cpus=N,ram=SIZE[,chardev=ID]\n"
+    "                add an isolated multiarch-virt CPU domain\n", QEMU_ARCH_ALL)
+DEF("domain-loader", HAS_ARG, QEMU_OPTION_domain_loader,
+    "-domain-loader domain=ID[,kernel=FILE][,initrd=FILE][,firmware=FILE][,append=TEXT]\n"
+    "                configure a multiarch-virt domain boot payload\n", QEMU_ARCH_ALL)
+DEF("domain-map", HAS_ARG, QEMU_OPTION_domain_map,
+    "-domain-map domain=ID,memory=BACKEND,addr=ADDRESS\n"
+    "                explicitly map a memory backend in a domain\n", QEMU_ARCH_ALL)
+
 HXCOMM This is the last statement. Insert new options before this line!
 
 #undef DEF

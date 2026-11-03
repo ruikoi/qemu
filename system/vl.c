@@ -23,6 +23,9 @@
  */
 
 #include "qemu/osdep.h"
+#ifdef CONFIG_HETERO_PROTOTYPE
+#include "hw/multiarch/composed-virt.h"
+#endif
 #include "qemu/help-texts.h"
 #include "qemu/datadir.h"
 #include "qemu/units.h"
@@ -3458,6 +3461,20 @@ void qemu_init(int argc, char **argv)
                 qdict_put_str(machine_opts_dict, "usb", "on");
                 add_device_config(DEV_USB, optarg);
                 break;
+            case QEMU_OPTION_domain:
+            case QEMU_OPTION_domain_loader:
+            case QEMU_OPTION_domain_map:
+                {
+                    const char *name =
+                        popt->index == QEMU_OPTION_domain ? "domain" :
+                        popt->index == QEMU_OPTION_domain_loader ?
+                        "domain-loader" : "domain-map";
+                    QemuOptsList *list = qemu_find_opts_err(name, &error_fatal);
+                    if (!qemu_opts_parse_noisily(list, optarg, false)) {
+                        exit(EXIT_FAILURE);
+                    }
+                    break;
+                }
             case QEMU_OPTION_device:
                 if (optarg[0] == '{') {
                     QObject *obj = qobject_from_json(optarg, &error_fatal);
@@ -3822,6 +3839,9 @@ void qemu_init(int argc, char **argv)
      */
 
     machine_class = MACHINE_GET_CLASS(current_machine);
+#ifdef CONFIG_HETERO_PROTOTYPE
+    multiarch_virt_validate_machine(current_machine);
+#endif
     if (!qtest_enabled() && machine_class->deprecation_reason) {
         warn_report("Machine type '%s' is deprecated: %s",
                      machine_class->name, machine_class->deprecation_reason);

@@ -3,14 +3,17 @@
 if get_option('hetero_prototype')
   system_ss.add(files(
     'domain.c',
+    'composed-virt.c',
     'virt.c',
   ))
   arm_common_ss.add(files(
     'domain-arm.c',
+    'composed-virt-arm.c',
     'virt-arm.c',
   ))
   riscv_ss.add(files(
     'domain-riscv.c',
+    'composed-virt-riscv.c',
     'virt-riscv.c',
   ))
 endif

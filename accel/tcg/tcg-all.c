@@ -24,6 +24,9 @@
  */
 
 #include "qemu/osdep.h"
+#ifdef CONFIG_HETERO_PROTOTYPE
+#include "hw/multiarch/composed-virt.h"
+#endif
 #include "system/tcg.h"
 #include "exec/replay-core.h"
 #include "exec/icount.h"
@@ -145,9 +148,9 @@ static int tcg_init_machine(AccelState *as, MachineState *ms)
     }
 
 #ifdef CONFIG_HETERO_PROTOTYPE
-    /* The basic multiarch machine has two independent CPU domains. */
+    /* Legacy boards add a second CPU; configurable domains supply a total. */
     if (qemu_tcg_mttcg_enabled()) {
-        max_threads = MAX(max_threads, 2);
+        max_threads = MAX(MAX(max_threads, 2), multiarch_virt_cpu_count());
     }
 #endif
 

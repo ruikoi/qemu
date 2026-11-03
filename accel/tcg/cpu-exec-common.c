@@ -36,9 +36,24 @@ void tcg_cflags_set(CPUState *cpu, uint32_t flags)
     cpu->tcg_cflags |= flags;
 }
 
+/* Called with the CPU stopped after its final cluster has been realized. */
+void tcg_update_cflags(CPUState *cpu)
+{
+    cpu->tcg_cflags &= ~(CF_CLUSTER_MASK | CF_PARALLEL);
+    cpu->tcg_cflags |= (uint32_t)cpu->cluster_index << CF_CLUSTER_SHIFT;
+    cpu->tcg_cflags |= qemu_tcg_mttcg_enabled() ? CF_PARALLEL : 0;
+}
+
 uint32_t curr_cflags(CPUState *cpu)
 {
     uint32_t cflags = cpu->tcg_cflags;
+
+#ifdef CONFIG_HETERO_PROTOTYPE
+    /* The extra domain is not counted in the primary machine's SMP topology. */
+    cflags &= ~(CF_CLUSTER_MASK | CF_PARALLEL);
+    cflags |= (uint32_t)cpu->cluster_index << CF_CLUSTER_SHIFT;
+    cflags |= qemu_tcg_mttcg_enabled() ? CF_PARALLEL : 0;
+#endif
 
     /*
      * Record gdb single-step.  We should be exiting the TB by raising

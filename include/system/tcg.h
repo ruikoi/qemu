@@ -19,6 +19,7 @@ extern bool tcg_allowed;
 
 /* Prepare all translators before starting vCPU threads. */
 void tcg_exec_initialize_target(CPUState *cpu);
+void tcg_update_cflags(CPUState *cpu);
 
 /**
  * qemu_tcg_mttcg_enabled:

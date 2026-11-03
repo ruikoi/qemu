@@ -836,6 +836,7 @@ Options: [defaults in brackets after descriptions]
 Standard options:
   --help                   print this message
   --target-list=LIST       set target list (default: build all)
+                          multiarch-softmmu builds the ARM/RISC-V experiment
 $(echo Available targets: $default_target_list | \
   fold -s -w 53 | sed -e 's/^/                           /')
   --target-list-exclude=LIST exclude a set of targets from the default target-list
@@ -1100,6 +1101,11 @@ if test -z "${target_list+xxx}" ; then
 else
     default_targets=no
     target_list=$(echo "$target_list" | sed -e 's/,/ /g')
+    if test "$target_list" = "multiarch-softmmu"; then
+        # Aggregate ISA libraries; multiarch does not define an instruction set.
+        target_list="aarch64-softmmu riscv64-softmmu"
+        meson_options="$meson_options -Dhetero_prototype=true"
+    fi
     for target in $target_list; do
         # Check that we recognised the target name; this allows a more
         # friendly error message than if we let it fall through.

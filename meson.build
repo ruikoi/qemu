@@ -2269,6 +2269,7 @@ endif
 #################
 
 config_host_data = configuration_data()
+config_host_data.set('CONFIG_HETERO_PROTOTYPE', get_option('hetero_prototype'))
 
 config_host_data.set('CONFIG_HAVE_RUST', have_rust)
 audio_drivers_selected = []
@@ -4255,6 +4256,16 @@ if host_os == 'darwin'
 endif
 
 traceable = []
+multi_target_libs = []
+multi_target_deps = []
+multi_target_crates = []
+multi_target_supported_targets = [
+  'aarch64-softmmu',
+  'arm-softmmu',
+  'microblaze-softmmu',
+  'riscv64-softmmu',
+]
+
 emulators = {}
 foreach target : target_dirs
   config_target = config_target_mak[target]
@@ -4327,7 +4338,7 @@ foreach target : target_dirs
     endif
   endif
 
-  if target in config_target_info
+  if target in config_target_info and not get_option('hetero_prototype')
     arch_srcs += config_target_info[target]
   else
     arch_srcs += files('target-info-stub.c')
@@ -4410,6 +4421,10 @@ foreach target : target_dirs
                  build_by_default: false)
 
   if target.endswith('-softmmu')
+    if get_option('hetero_prototype') and target in multi_target_supported_targets
+      multi_target_libs += lib
+      multi_target_deps += arch_deps + [target_stubs]
+    endif
     execs = [{
       'name': 'qemu-system-' + target_name,
       'win_subsystem': 'console',
@@ -4492,6 +4507,43 @@ foreach target : target_dirs
 endforeach
 
 # Other build targets
+
+multi_target_objects = []
+foreach lib: multi_target_libs
+  multi_target_objects += lib.extract_all_objects(recursive: true)
+endforeach
+
+multi_target_link_args = emulator_link_args
+multi_target_link_args += enable_modules ? ['@block.syms', '@qemu.syms'] : []
+
+# Local experiment: intentionally explicit and excluded from normal builds.
+if get_option('hetero_prototype')
+  if target_dirs != ['aarch64-softmmu', 'riscv64-softmmu']
+    error('hetero_prototype requires exactly aarch64-softmmu,riscv64-softmmu')
+  endif
+  hetero_name = host_os == 'darwin' ? 'qemu-system-hetero-unsigned' : 'qemu-system-hetero'
+  hetero_exe = executable(hetero_name, files('system/main.c'),
+    objects: multi_target_objects,
+    dependencies: multi_target_deps + [sdl],
+    link_depends: [block_syms, qemu_syms],
+    link_args: multi_target_link_args,
+    install: false)
+  if host_os == 'darwin'
+    hetero_signed = custom_target('qemu-system-hetero',
+      input: [hetero_exe, files('pc-bios/qemu.rsrc')],
+      output: 'qemu-system-hetero',
+      build_by_default: true,
+      command: [entitlement, '@OUTPUT@', '@INPUT@'])
+    multiarch_input = hetero_signed
+  else
+    multiarch_input = hetero_exe
+  endif
+  custom_target('qemu-system-multiarch',
+    input: multiarch_input,
+    output: 'qemu-system-multiarch',
+    build_by_default: true,
+    command: [find_program('scripts/multiarch-copy.py'), '@INPUT@', '@OUTPUT@'])
+endif
 
 if get_option('plugins')
   install_headers('include/plugins/qemu-plugin.h')

@@ -21,6 +21,7 @@ subdir('sparc')
 subdir('sparc64')
 subdir('tricore')
 subdir('xtensa')
+subdir('multiarch')
 
 subdir('9pfs')
 subdir('acpi')

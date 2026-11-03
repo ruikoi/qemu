@@ -34,7 +34,11 @@ const char *target_cpu_type(void)
 
 const char *target_machine_typename(void)
 {
+#ifdef CONFIG_HETERO_PROTOTYPE
+    return "machine";
+#else
     return target_info()->machine_typename;
+#endif
 }
 
 EndianMode target_endian_mode(void)

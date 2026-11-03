@@ -10,6 +10,9 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#define HETERO_PREFIX riscv_hetero_
+#include "qemu/hetero-namespace.h"
+#include "cpu.h"
 #include "semihosting/common-semi.h"
 
 uint64_t common_semi_arg(CPUState *cs, int argno)

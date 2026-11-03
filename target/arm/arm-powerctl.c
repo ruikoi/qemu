@@ -24,6 +24,15 @@ CPUState *arm_get_cpu_by_id(uint64_t id)
     CPUState *cpu;
 
     CPU_FOREACH(cpu) {
+        if (!object_dynamic_cast(OBJECT(cpu), TYPE_ARM_CPU)) {
+            continue;
+        }
+#ifdef CONFIG_HETERO_PROTOTYPE
+        /* A guest's PSCI requests cannot power up CPUs in another domain. */
+        if (current_cpu && current_cpu->memory != cpu->memory) {
+            continue;
+        }
+#endif
         ARMCPU *armcpu = ARM_CPU(cpu);
 
         if (arm_cpu_mp_affinity(armcpu) == id) {

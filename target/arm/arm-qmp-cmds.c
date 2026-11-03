@@ -21,6 +21,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "cpu.h"
+#define HETERO_PREFIX arm_hetero_
+#include "qemu/hetero-namespace.h"
 #include "qemu/target-info.h"
 #include "hw/core/boards.h"
 #include "kvm_arm.h"

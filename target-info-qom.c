@@ -68,6 +68,18 @@ void target_info_qom_set_target(void)
     g_autoptr(GSList) targets = object_class_get_list(TYPE_TARGET_INFO, false);
 
     size_t num_found = g_slist_length(targets);
+#ifdef CONFIG_HETERO_PROTOTYPE
+    if (num_found == 2) {
+        /* Machine defaults only; CPU-specific operations must dispatch by CPU. */
+        for (GSList *it = targets; it; it = it->next) {
+            const TargetInfo *ti = TARGET_INFO_CLASS(it->data)->target_info;
+            if (strcmp(ti->target_name, "aarch64") == 0) {
+                target_info_ptr = ti;
+                return;
+            }
+        }
+    }
+#endif
     if (num_found != 1) {
         error_setg(&error_fatal, num_found == 0 ?
                                  "no target-info is available" :

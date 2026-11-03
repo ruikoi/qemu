@@ -9,6 +9,9 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#define HETERO_PREFIX arm_hetero_
+#include "qemu/hetero-namespace.h"
+#include "cpu.h"
 #include "semihosting/common-semi.h"
 #include "target/arm/cpu-qom.h"
 

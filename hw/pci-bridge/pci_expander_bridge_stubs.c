@@ -11,4 +11,8 @@
 #include "hw/pci-bridge/pci_expander_bridge.h"
 #include "hw/cxl/cxl.h"
 
+#ifdef CONFIG_HETERO_PROTOTYPE
+/* The combined executable also contains the full ARM-selected PXB device. */
+__attribute__((weak))
+#endif
 void pxb_cxl_hook_up_registers(CXLState *state, PCIBus *bus, Error **errp) {};

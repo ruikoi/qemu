@@ -21,6 +21,10 @@
 #include "qapi/type-helpers.h"
 #include "qemu/uuid.h"
 #include "qemu/target-info.h"
+#ifdef CONFIG_HETERO_PROTOTYPE
+#include "qemu/target-info-impl.h"
+#include "qemu/multiarch-runtime.h"
+#endif
 #include "qemu/target-info-qapi.h"
 #include "qom/qom-qobject.h"
 #include "system/hostmem.h"
@@ -63,7 +67,9 @@ CpuInfoFastList *qmp_query_cpus_fast(Error **errp)
     MachineState *ms = MACHINE(qdev_get_machine());
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     CpuInfoFastList *head = NULL, **tail = &head;
+#ifndef CONFIG_HETERO_PROTOTYPE
     SysEmuTarget target = target_arch();
+#endif
     CPUState *cpu;
 
     CPU_FOREACH(cpu) {
@@ -81,7 +87,11 @@ CpuInfoFastList *qmp_query_cpus_fast(Error **errp)
             value->props = props;
         }
 
+#ifdef CONFIG_HETERO_PROTOTYPE
+        value->target = hetero_cpu_arch(cpu);
+#else
         value->target = target;
+#endif
         if (cpu->cc->query_cpu_fast) {
             cpu->cc->query_cpu_fast(cpu, value);
         }

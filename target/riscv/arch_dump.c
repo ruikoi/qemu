@@ -18,6 +18,9 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#define HETERO_PREFIX riscv_hetero_
+#include "qemu/hetero-namespace.h"
+#include "cpu.h"
 #include "elf.h"
 #include "system/dump.h"
 

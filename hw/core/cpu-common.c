@@ -29,6 +29,10 @@
 #include "qemu/error-report.h"
 #include "qemu/qemu-print.h"
 #include "qemu/target-info.h"
+#ifdef CONFIG_HETERO_PROTOTYPE
+#include "hw/core/boards.h"
+#include "qemu/multiarch-runtime.h"
+#endif
 #include "exec/log.h"
 #include "exec/gdbstub.h"
 #include "system/tcg.h"
@@ -214,7 +218,12 @@ const char *parse_cpu_option(const char *cpu_option)
         exit(1);
     }
 
+#ifdef CONFIG_HETERO_PROTOTYPE
+    oc = cpu_class_by_name(hetero_machine_cpu_type(current_machine),
+                           model_pieces[0]);
+#else
     oc = cpu_class_by_name(target_cpu_type(), model_pieces[0]);
+#endif
     if (oc == NULL) {
         error_report("unable to find CPU model '%s'", model_pieces[0]);
         g_strfreev(model_pieces);

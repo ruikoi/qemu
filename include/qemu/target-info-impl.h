@@ -13,6 +13,9 @@
 #include "qapi/qapi-types-machine.h"
 
 typedef struct TargetInfo {
+#ifdef CONFIG_HETERO_PROTOTYPE
+    const struct MultiarchRuntimeOps *runtime_ops;
+#endif
     /* runtime equivalent of TARGET_NAME definition */
     const char *target_name;
     /* related to TARGET_ARCH definition */
@@ -40,5 +43,8 @@ typedef struct TargetInfo {
  * Returns: The TargetInfo structure definition for this target binary.
  */
 const TargetInfo *target_info(void);
+#ifdef CONFIG_HETERO_PROTOTYPE
+const TargetInfo *target_info_for_cpu(CPUState *cpu);
+#endif
 
 #endif

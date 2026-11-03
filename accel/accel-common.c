@@ -10,6 +10,9 @@
 #include "qemu/osdep.h"
 #include "qemu/accel.h"
 #include "qemu/target-info.h"
+#ifdef CONFIG_HETERO_PROTOTYPE
+#include "qemu/target-info-qom.h"
+#endif
 #include "accel/accel-ops.h"
 #include "accel/accel-cpu.h"
 #include "accel/accel-cpu-ops.h"
@@ -44,12 +47,12 @@ static void accel_init_cpu_int_aux(ObjectClass *klass, void *opaque)
 }
 
 /* initialize the arch-specific accel CpuClass interfaces */
-static void accel_init_cpu_interfaces(AccelClass *ac)
+static void accel_init_cpu_target_interfaces(AccelClass *ac,
+                                             const char *cpu_resolving_type)
 {
     const char *ac_name; /* AccelClass name */
     char *acc_name;      /* AccelCPUClass name */
     ObjectClass *acc;    /* AccelCPUClass */
-    const char *cpu_resolving_type = target_cpu_type();
 
     ac_name = object_class_get_name(OBJECT_CLASS(ac));
     g_assert(ac_name != NULL);
@@ -67,7 +70,15 @@ static void accel_init_cpu_interfaces(AccelClass *ac)
 void accel_init_interfaces(AccelClass *ac)
 {
     accel_init_ops_interfaces(ac);
-    accel_init_cpu_interfaces(ac);
+#ifdef CONFIG_HETERO_PROTOTYPE
+    g_autoptr(GSList) targets = object_class_get_list(TYPE_TARGET_INFO, false);
+    for (GSList *it = targets; it; it = it->next) {
+        const TargetInfo *ti = TARGET_INFO_CLASS(it->data)->target_info;
+        accel_init_cpu_target_interfaces(ac, ti->cpu_type);
+    }
+#else
+    accel_init_cpu_target_interfaces(ac, target_cpu_type());
+#endif
 }
 
 bool accel_supports_guest_debug(AccelState *accel)
@@ -130,9 +141,9 @@ static const TypeInfo accel_types[] = {
 
 DEFINE_TYPES(accel_types)
 
-static void register_accel_target_type(void)
+static void register_accel_cpu_type(const char *cpu_type)
 {
-    g_autofree char *name = g_strconcat("accel-", target_cpu_type(), NULL);
+    g_autofree char *name = g_strconcat("accel-", cpu_type, NULL);
     const TypeInfo accel_cpu_type = {
         .name = name,
         .parent = TYPE_OBJECT,
@@ -141,6 +152,19 @@ static void register_accel_target_type(void)
     };
 
     type_register_static(&accel_cpu_type);
+}
+
+static void register_accel_target_type(void)
+{
+#ifdef CONFIG_HETERO_PROTOTYPE
+    g_autoptr(GSList) targets = object_class_get_list(TYPE_TARGET_INFO, false);
+    for (GSList *it = targets; it; it = it->next) {
+        const TargetInfo *ti = TARGET_INFO_CLASS(it->data)->target_info;
+        register_accel_cpu_type(ti->cpu_type);
+    }
+#else
+    register_accel_cpu_type(target_cpu_type());
+#endif
 }
 
 type_init(register_accel_target_type);

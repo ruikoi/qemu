@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "system/address-spaces.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -473,13 +474,12 @@ type_init(sifive_plic_register_types)
 /*
  * Create PLIC device.
  */
-DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
-    uint32_t num_harts,
-    uint32_t hartid_base, uint32_t num_sources,
-    uint32_t num_priorities, uint32_t priority_base,
-    uint32_t pending_base, uint32_t enable_base,
-    uint32_t enable_stride, uint32_t context_base,
-    uint32_t context_stride, uint32_t aperture_size)
+DeviceState *sifive_plic_create_with_memory(
+    MemoryRegion *memory, hwaddr addr, char *hart_config, uint32_t
+    num_harts, uint32_t hartid_base, uint32_t num_sources, uint32_t
+    num_priorities, uint32_t priority_base, uint32_t pending_base, uint32_t
+    enable_base, uint32_t enable_stride, uint32_t context_base, uint32_t
+    context_stride, uint32_t aperture_size)
 {
     DeviceState *dev = qdev_new(TYPE_SIFIVE_PLIC);
     int i;
@@ -499,7 +499,8 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     qdev_prop_set_uint32(dev, "context-stride", context_stride);
     qdev_prop_set_uint32(dev, "aperture-size", aperture_size);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    memory_region_add_subregion(memory, addr,
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0));
 
     plic = SIFIVE_PLIC(dev);
 
@@ -518,4 +519,20 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     }
 
     return dev;
+}
+
+
+DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
+    uint32_t num_harts,
+    uint32_t hartid_base, uint32_t num_sources,
+    uint32_t num_priorities, uint32_t priority_base,
+    uint32_t pending_base, uint32_t enable_base,
+    uint32_t enable_stride, uint32_t context_base,
+    uint32_t context_stride, uint32_t aperture_size)
+{
+    return sifive_plic_create_with_memory(
+        get_system_memory(), addr, hart_config, num_harts, hartid_base,
+        num_sources, num_priorities, priority_base, pending_base,
+        enable_base, enable_stride, context_base, context_stride,
+        aperture_size);
 }

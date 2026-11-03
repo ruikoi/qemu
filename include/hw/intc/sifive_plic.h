@@ -84,4 +84,11 @@ DeviceState *sifive_plic_create(hwaddr addr, char *hart_config,
     uint32_t enable_stride, uint32_t context_base,
     uint32_t context_stride, uint32_t aperture_size);
 
+DeviceState *sifive_plic_create_with_memory(
+    MemoryRegion *memory, hwaddr addr, char *hart_config, uint32_t
+    num_harts, uint32_t hartid_base, uint32_t num_sources, uint32_t
+    num_priorities, uint32_t priority_base, uint32_t pending_base, uint32_t
+    enable_base, uint32_t enable_stride, uint32_t context_base, uint32_t
+    context_stride, uint32_t aperture_size);
+
 #endif

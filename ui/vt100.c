@@ -931,6 +931,11 @@ void vt100_keysym(QemuVT100 *vt, int keysym)
     }
 }
 
+bool vt100_cursor_visible(void)
+{
+    return cursor_visible_phase;
+}
+
 void vt100_update_cursor(void)
 {
     QemuVT100 *vt;

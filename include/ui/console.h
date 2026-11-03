@@ -356,6 +356,32 @@ void qemu_console_hw_update(QemuConsole *con);
 void qemu_console_hw_update_done(QemuConsole *con);
 void qemu_console_hw_invalidate(QemuConsole *con);
 void qemu_console_hw_text_update(QemuConsole *con, uint32_t *chardata);
+
+/* A non-destructive copy of the visible VC screen, including scrollback. */
+enum {
+    QEMU_CONSOLE_TEXT_BOLD = 1 << 0,
+    QEMU_CONSOLE_TEXT_UNDERLINE = 1 << 1,
+    QEMU_CONSOLE_TEXT_BLINK = 1 << 2,
+    QEMU_CONSOLE_TEXT_INVERSE = 1 << 3,
+    QEMU_CONSOLE_TEXT_INVISIBLE = 1 << 4,
+};
+
+typedef struct QemuConsoleTextCell {
+    uint8_t ch; /* CP437, like the VGA text surface */
+    uint8_t fg, bg, attributes;
+} QemuConsoleTextCell;
+
+typedef struct QemuConsoleText {
+    int width, height;
+    int cursor_x, cursor_y;
+    bool cursor_visible;
+    bool blink_visible;
+    QemuConsoleTextCell cells[];
+} QemuConsoleText;
+
+/* Call with the BQL held. Free with g_free(); returns NULL for non-VCs. */
+QemuConsoleText *qemu_console_get_text(QemuConsole *con);
+
 void qemu_console_hw_gl_block(QemuConsole *con, bool block);
 
 void qemu_console_early_init(void);

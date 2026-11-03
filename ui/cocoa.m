@@ -94,8 +94,14 @@ static const DisplayChangeListenerOps dcl_ops = {
     .dpy_mouse_set = cocoa_mouse_set,
     .dpy_cursor_define = cocoa_cursor_define,
 };
-static DisplayChangeListener dcl;
-static QKbdState *kbd;
+typedef struct CocoaListener {
+    DisplayChangeListener dcl;
+    void *view;
+} CocoaListener;
+
+static bool split_console;
+static bool five_console;
+static bool cocoa_initialized;
 static int cursor_hide = 1;
 static int left_command_key_enabled = 1;
 static bool swap_opt_cmd;
@@ -176,6 +182,8 @@ static void handleAnyDeviceErrors(Error * err)
 */
 @interface QemuCocoaView : NSView
 {
+    CocoaListener listener;
+    QKbdState *kbd;
     QEMUScreen screen;
     pixman_image_t *pixman_image;
     /* The state surrounding mouse grabbing is potentially confusing.
@@ -196,6 +204,8 @@ static void handleAnyDeviceErrors(Error * err)
     int mouseY;
     bool mouseOn;
 }
+- (void) attachConsole:(QemuConsole *)con;
+- (void) detachConsole;
 - (void) switchSurface:(pixman_image_t *)image;
 - (void) grabMouse;
 - (void) ungrabMouse;
@@ -210,6 +220,9 @@ static void handleAnyDeviceErrors(Error * err)
 @end
 
 QemuCocoaView *cocoaView;
+static QemuCocoaView *secondaryView;
+static NSMutableArray *consoleViews;
+static QemuCocoaView *activeView;
 
 static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEventRef cgEvent, void *userInfo)
 {
@@ -245,6 +258,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
         [self addTrackingArea:trackingArea];
         [trackingArea release];
+        listener.view = self;
         screen.width = frameRect.size.width;
         screen.height = frameRect.size.height;
         colorspace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
@@ -290,6 +304,20 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     [self resizeWindow];
 }
 
+- (void) attachConsole:(QemuConsole *)con
+{
+    qemu_console_register_listener(con, &listener.dcl, &dcl_ops);
+    kbd = qkbd_state_init(con);
+}
+
+- (void) detachConsole
+{
+    if (kbd) {
+        qemu_console_unregister_listener(&listener.dcl);
+        g_clear_pointer(&kbd, qkbd_state_free);
+    }
+}
+
 - (void) selectConsoleLocked:(unsigned int)index
 {
     QemuConsole *con = qemu_console_lookup_by_index(index);
@@ -297,9 +325,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         return;
     }
 
-    qemu_console_unregister_listener(&dcl);
+    qemu_console_unregister_listener(&listener.dcl);
     qkbd_state_switch_console(kbd, con);
-    qemu_console_register_listener(con, &dcl, &dcl_ops);
+    qemu_console_register_listener(con, &listener.dcl, &dcl_ops);
     [self notifyMouseModeChange];
     [self updateUIInfo];
 }
@@ -386,9 +414,127 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     CGImageRelease(image);
 }
 
+/* Keep text in host points: AppKit rasterizes glyphs at the Retina scale. */
+- (void) drawTextConsole:(QemuConsoleText *)text
+{
+    NSRect bounds = [self bounds];
+    CGFloat padding = 10;
+    NSFont *font = [NSFont fontWithName:@"Menlo" size:14];
+    if (!font) {
+        font = [NSFont userFixedPitchFontOfSize:14];
+    }
+    CGFloat cellWidth = [@"M" sizeWithAttributes:
+                         @{NSFontAttributeName:font}].width;
+    CGFloat lineHeight = ceil([font ascender] - [font descender] +
+                              [font leading] + 1);
+    CGFloat scale = MIN(1.0, MIN(MAX(1, bounds.size.width - 2 * padding) /
+                               (text->width * cellWidth),
+                               MAX(1, bounds.size.height - 2 * padding) /
+                               (text->height * lineHeight)));
+    font = [NSFont fontWithName:[font fontName] size:14 * scale];
+    NSFont *boldFont = [[NSFontManager sharedFontManager]
+                       convertFont:font toHaveTrait:NSBoldFontMask];
+    cellWidth = [@"M" sizeWithAttributes:@{NSFontAttributeName:font}].width;
+    lineHeight *= scale;
+    NSColor *background = [NSColor colorWithSRGBRed:0.055 green:0.067
+                                             blue:0.086 alpha:1];
+    /* Readable ANSI colors on a dark background, in QEMU's BGR order. */
+    static const uint8_t rgb[2][8][3] = {
+        {{14, 17, 22}, {97, 175, 239}, {152, 195, 121}, {86, 182, 194},
+         {224, 108, 117}, {198, 120, 221}, {229, 192, 123}, {212, 219, 230}},
+        {{14, 17, 22}, {130, 185, 255}, {179, 222, 138}, {118, 219, 232},
+         {255, 133, 133}, {225, 155, 234}, {255, 224, 138}, {255, 255, 255}},
+    };
+    NSColor *palette[2][8];
+    for (int bright = 0; bright < 2; bright++) {
+        for (int color = 0; color < 8; color++) {
+            palette[bright][color] = [NSColor colorWithSRGBRed:
+                rgb[bright][color][0] / 255.0
+                green:rgb[bright][color][1] / 255.0
+                blue:rgb[bright][color][2] / 255.0 alpha:1];
+        }
+    }
+    palette[0][QEMU_COLOR_BLACK] = background;
+    palette[1][QEMU_COLOR_BLACK] = background;
+    [background setFill];
+    NSRectFill(bounds);
+    CGContextRef context = [[NSGraphicsContext currentContext] CGContext];
+    CGContextSetShouldAntialias(context, YES);
+    NSStringEncoding encoding = CFStringConvertEncodingToNSStringEncoding(
+                                  kCFStringEncodingDOSLatinUS);
+    g_autofree uint8_t *bytes = g_new(uint8_t, text->width);
+    for (int row = 0; row < text->height; row++) {
+        for (int col = 0; col < text->width;) {
+            QemuConsoleTextCell *cell = &text->cells[row * text->width + col];
+            unsigned attributes = cell->attributes;
+            int end = col + 1;
+            while (end < text->width) {
+                QemuConsoleTextCell *next =
+                    &text->cells[row * text->width + end];
+                if (next->fg != cell->fg || next->bg != cell->bg ||
+                    next->attributes != attributes) {
+                    break;
+                }
+                end++;
+            }
+            bool bold = attributes & QEMU_CONSOLE_TEXT_BOLD;
+            NSColor *fg = palette[bold][cell->fg & 7];
+            NSColor *bg = palette[bold][cell->bg & 7];
+            if (attributes & QEMU_CONSOLE_TEXT_INVERSE) {
+                NSColor *swap = fg;
+                fg = bg;
+                bg = swap;
+            }
+            NSRect run = NSMakeRect(bounds.origin.x + padding + col * cellWidth,
+                NSMaxY(bounds) - padding - (row + 1) * lineHeight,
+                (end - col) * cellWidth, lineHeight);
+            [bg setFill];
+            NSRectFill(run);
+            bool hidden = attributes & QEMU_CONSOLE_TEXT_INVISIBLE;
+            if ((attributes & QEMU_CONSOLE_TEXT_BLINK) &&
+                !text->blink_visible) {
+                hidden = true;
+            }
+            for (int i = col; i < end; i++) {
+                uint8_t ch = text->cells[row * text->width + i].ch;
+                bytes[i - col] = hidden || ch < 32 ? ' ' : ch;
+            }
+            NSString *string = [[[NSString alloc] initWithBytes:bytes
+                        length:end - col encoding:encoding] autorelease];
+            NSMutableDictionary *style = [NSMutableDictionary dictionaryWithDictionary:
+                @{NSFontAttributeName:bold ? boldFont : font,
+                  NSForegroundColorAttributeName:fg}];
+            if (attributes & QEMU_CONSOLE_TEXT_UNDERLINE) {
+                style[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+            }
+            [string drawAtPoint:NSMakePoint(run.origin.x, run.origin.y +
+                (lineHeight - [font ascender] + [font descender]) / 2)
+                withAttributes:style];
+            col = end;
+        }
+    }
+    if (text->cursor_visible) {
+        [palette[0][QEMU_COLOR_WHITE] setFill];
+        NSRectFill(NSMakeRect(bounds.origin.x + padding +
+            text->cursor_x * cellWidth,
+            NSMaxY(bounds) - padding - (text->cursor_y + 1) * lineHeight,
+            cellWidth, MAX(1, 2 * scale)));
+    }
+}
+
 - (void) drawRect:(NSRect) rect
 {
     COCOA_DEBUG("QemuCocoaView: drawRect\n");
+
+    __block QemuConsoleText *text = NULL;
+    with_bql(^{
+        text = qemu_console_get_text(listener.dcl.con);
+    });
+    if (text) {
+        [self drawTextConsole:text];
+        g_free(text);
+        return;
+    }
 
     // get CoreGraphic context
     CGContextRef viewContextRef = [[NSGraphicsContext currentContext] CGContext];
@@ -497,6 +643,10 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
 - (void) resizeWindow
 {
+    if (split_console) {
+        [self updateBounds];
+        return;
+    }
     [[self window] setContentAspectRatio:NSMakeSize(screen.width, screen.height)];
 
     if (!([[self window] styleMask] & NSWindowStyleMaskResizable)) {
@@ -515,7 +665,12 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
 - (void) updateBounds
 {
-    [self setBoundsSize:NSMakeSize(screen.width, screen.height)];
+    bool isText = bool_with_bql(^bool {
+        return listener.dcl.con && !qemu_console_is_graphic(listener.dcl.con);
+    });
+    [self setBoundsSize:isText ? [self frame].size :
+                       NSMakeSize(screen.width, screen.height)];
+    [self setNeedsDisplay:YES];
 }
 
 #pragma clang diagnostic push
@@ -527,7 +682,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     NSSize frameSize;
     QemuUIInfo info;
 
-    if (!qemu_console_is_graphic(dcl.con)) {
+    if (!qemu_console_is_graphic(listener.dcl.con)) {
         return;
     }
 
@@ -545,7 +700,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
             CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(displayLink);
             CVDisplayLinkRelease(displayLink);
             if (!(period.flags & kCVTimeIsIndefinite)) {
-                qemu_console_listener_set_refresh(&dcl,
+                qemu_console_listener_set_refresh(&listener.dcl,
                                                   1000 * period.timeValue / period.timeScale);
                 info.refresh_rate = (int64_t)1000 * period.timeScale / period.timeValue;
             }
@@ -564,7 +719,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     info.width = frameSize.width * [[self window] backingScaleFactor];
     info.height = frameSize.height * [[self window] backingScaleFactor];
 
-    qemu_console_set_ui_info(dcl.con, &info, TRUE);
+    qemu_console_set_ui_info(listener.dcl.con, &info, TRUE);
 }
 
 #pragma clang diagnostic pop
@@ -574,9 +729,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     if (!allow_events) {
         /*
          * Don't try to tell QEMU about UI information in the application
-         * startup phase -- we haven't yet registered dcl with the QEMU UI
+         * startup phase -- we haven't yet registered listener.dcl with the QEMU UI
          * layer.
-         * When cocoa_display_init() does register the dcl, the UI layer
+         * When cocoa_display_init() does register the listener.dcl, the UI layer
          * will call cocoa_switch(), which will call updateUIInfo, so
          * we don't lose any information here.
          */
@@ -706,7 +861,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     }
 
     if (keysym) {
-        QemuTextConsole *con = QEMU_TEXT_CONSOLE(dcl.con);
+        QemuTextConsole *con = QEMU_TEXT_CONSOLE(listener.dcl.con);
         qemu_text_console_put_keysym(con, keysym);
     }
 }
@@ -725,6 +880,30 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     InputButton button;
     unsigned int keycode;
     NSUInteger modifiers = [event modifierFlags];
+
+    /* Text panes send bytes to their UART, never to guest input devices. */
+    if (split_console && !qemu_console_is_graphic(listener.dcl.con)) {
+        if ([event type] == NSEventTypeKeyDown) {
+            if (modifiers & NSEventModifierFlagCommand) {
+                return false;
+            }
+            if ((modifiers & NSEventModifierFlagControl) &&
+                (modifiers & NSEventModifierFlagOption)) {
+                NSString *chars = [event charactersIgnoringModifiers];
+                if ([chars length] == 1) {
+                    unichar key = [chars characterAtIndex:0];
+                    if (key >= '1' && key <= '9') {
+                        [self selectConsoleLocked:key - '1'];
+                        return true;
+                    }
+                }
+            }
+            [self handleMonitorInput:event];
+            return true;
+        }
+        return [event type] == NSEventTypeKeyUp ||
+               [event type] == NSEventTypeFlagsChanged;
+    }
 
     /*
      * Check -[NSEvent modifierFlags] here.
@@ -898,7 +1077,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 }
             }
 
-            if (qemu_console_is_graphic(dcl.con)) {
+            if (qemu_console_is_graphic(listener.dcl.con)) {
                 qkbd_state_key_event(kbd, keycode, true);
             } else {
                 [self handleMonitorInput: event];
@@ -913,7 +1092,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 return true;
             }
 
-            if (qemu_console_is_graphic(dcl.con)) {
+            if (qemu_console_is_graphic(listener.dcl.con)) {
                 qkbd_state_key_event(kbd, keycode, false);
             }
             return true;
@@ -938,9 +1117,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
                 return true;
             }
 
-            qemu_input_queue_btn(dcl.con, button, true);
+            qemu_input_queue_btn(listener.dcl.con, button, true);
             qemu_input_event_sync();
-            qemu_input_queue_btn(dcl.con, button, false);
+            qemu_input_queue_btn(listener.dcl.con, button, false);
             qemu_input_event_sync();
 
             return true;
@@ -956,7 +1135,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
     }
 
     with_bql(^{
-        qemu_input_queue_btn(dcl.con, button, down);
+        qemu_input_queue_btn(listener.dcl.con, button, down);
     });
 
     [self handleMouseEvent:event];
@@ -970,15 +1149,18 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
     with_bql(^{
         if (isAbsoluteEnabled) {
-            CGFloat d = (CGFloat)screen.height / [self frame].size.height;
-            NSPoint p = [event locationInWindow];
+            CGFloat d = split_console ? 1 :
+                (CGFloat)screen.height / [self frame].size.height;
+            NSPoint p = split_console ?
+                [self convertPoint:[event locationInWindow] fromView:nil] :
+                [event locationInWindow];
 
             /* Note that the origin for Cocoa mouse coords is bottom left, not top left. */
-            qemu_input_queue_abs(dcl.con, INPUT_AXIS_X, p.x * d, 0, screen.width);
-            qemu_input_queue_abs(dcl.con, INPUT_AXIS_Y, screen.height - p.y * d, 0, screen.height);
+            qemu_input_queue_abs(listener.dcl.con, INPUT_AXIS_X, p.x * d, 0, screen.width);
+            qemu_input_queue_abs(listener.dcl.con, INPUT_AXIS_Y, screen.height - p.y * d, 0, screen.height);
         } else {
-            qemu_input_queue_rel(dcl.con, INPUT_AXIS_X, [event deltaX]);
-            qemu_input_queue_rel(dcl.con, INPUT_AXIS_Y, [event deltaY]);
+            qemu_input_queue_rel(listener.dcl.con, INPUT_AXIS_X, [event deltaX]);
+            qemu_input_queue_rel(listener.dcl.con, INPUT_AXIS_Y, [event deltaY]);
         }
 
         qemu_input_event_sync();
@@ -1036,6 +1218,10 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 
 - (void) mouseUp:(NSEvent *)event
 {
+    if (split_console && !qemu_console_is_graphic(listener.dcl.con)) {
+        return;
+    }
+
     if (!isMouseGrabbed) {
         [self grabMouse];
     }
@@ -1081,8 +1267,11 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 }
 
 - (void) notifyMouseModeChange {
-    bool tIsAbsoluteEnabled = bool_with_bql(^{
-        return qemu_input_is_absolute(dcl.con);
+    bool tIsAbsoluteEnabled = bool_with_bql(^bool(void) {
+        if (split_console && !qemu_console_is_graphic(listener.dcl.con)) {
+            return false;
+        }
+        return qemu_input_is_absolute(listener.dcl.con);
     });
 
     if (tIsAbsoluteEnabled == isAbsoluteEnabled) {
@@ -1117,9 +1306,9 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (void) raiseAllButtons
 {
     with_bql(^{
-        qemu_input_queue_btn(dcl.con, INPUT_BUTTON_LEFT, false);
-        qemu_input_queue_btn(dcl.con, INPUT_BUTTON_RIGHT, false);
-        qemu_input_queue_btn(dcl.con, INPUT_BUTTON_MIDDLE, false);
+        qemu_input_queue_btn(listener.dcl.con, INPUT_BUTTON_LEFT, false);
+        qemu_input_queue_btn(listener.dcl.con, INPUT_BUTTON_RIGHT, false);
+        qemu_input_queue_btn(listener.dcl.con, INPUT_BUTTON_MIDDLE, false);
     });
 }
 @end
@@ -1181,7 +1370,65 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
         [window setAcceptsMouseMovedEvents:YES];
         [window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
         [window setTitle:qemu_name ? [NSString stringWithFormat:@"QEMU %s", qemu_name] : @"QEMU"];
-        [window setContentView:cocoaView];
+        activeView = cocoaView;
+        if (split_console) {
+            CGFloat height = five_console ? 900 : 540;
+            NSSplitView *split = [[NSSplitView alloc]
+                initWithFrame:NSMakeRect(0, 0, 1280, height)];
+            [split setVertical:YES];
+            [split setDividerStyle:NSSplitViewDividerStyleThin];
+            consoleViews = [[NSMutableArray alloc] init];
+            [consoleViews addObject:cocoaView];
+            unsigned count = five_console ? 5 : 2;
+            for (unsigned i = 1; i < count; i++) {
+                QemuCocoaView *view = [[QemuCocoaView alloc]
+                    initWithFrame:NSMakeRect(0, 0, 640, height)];
+                [consoleViews addObject:view];
+                [view release];
+            }
+            secondaryView = [consoleViews objectAtIndex:1];
+            for (unsigned column = 0; column < 2; column++) {
+                NSSplitView *stack = [[NSSplitView alloc]
+                    initWithFrame:NSMakeRect(0, 0, 640, height)];
+                [stack setVertical:NO];
+                [stack setDividerStyle:NSSplitViewDividerStyleThin];
+                unsigned rows = five_console ? (column ? 3 : 2) : 1;
+                for (unsigned row = 0; row < rows; row++) {
+                    unsigned i = five_console ? (column ? 2 : 0) + row : column;
+                    QemuCocoaView *view = [consoleViews objectAtIndex:i];
+                    NSString *title = five_console ?
+                        [NSString stringWithFormat:@"%s%u", column ? "RTOS" : "Linux", column ? row + 1 : row] :
+                        (column ? @"MCU console" : @"Main console");
+                    CGFloat panelHeight = height / rows;
+                    NSView *panel = [[NSView alloc]
+                        initWithFrame:NSMakeRect(0, 0, 640, panelHeight)];
+                    NSTextField *label = [NSTextField labelWithString:title];
+                    [label setFrame:NSMakeRect(8, panelHeight - 22, 624, 20)];
+                    [label setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+                    [view setFrame:NSMakeRect(0, 0, 640, panelHeight - 24)];
+                    [view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+                    [view setAccessibilityLabel:title];
+                    [panel addSubview:view];
+                    [panel addSubview:label];
+                    [stack addSubview:panel];
+                    [panel release];
+                }
+                [stack adjustSubviews];
+                [split addSubview:stack];
+                [stack release];
+            }
+            [window setStyleMask:[window styleMask] |
+                                NSWindowStyleMaskResizable];
+            [window setContentSize:NSMakeSize(1280, height)];
+            [window setMinSize:NSMakeSize(800, 360)];
+            [window setContentView:split];
+            [split adjustSubviews];
+            [[cocoaView layer] setBorderWidth:2];
+            [[cocoaView layer] setBorderColor:[[NSColor systemBlueColor] CGColor]];
+            [split release];
+        } else {
+            [window setContentView:cocoaView];
+        }
         [window makeKeyAndOrderFront:self];
         [window center];
         [window setDelegate: self];
@@ -1205,6 +1452,8 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 {
     COCOA_DEBUG("QemuCocoaAppController: dealloc\n");
 
+    [consoleViews release];
+    consoleViews = nil;
     [cocoaView release];
 
     [super dealloc];
@@ -1265,6 +1514,10 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 {
     [cocoaView updateBounds];
     [cocoaView updateUIInfo];
+    for (QemuCocoaView *view in consoleViews) {
+        [view updateBounds];
+        [view updateUIInfo];
+    }
 }
 
 /* Called when the user clicks on a window's close button */
@@ -1297,8 +1550,8 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (void) windowDidResignKey: (NSNotification *)aNotification
 {
     COCOA_DEBUG("%s\n", __func__);
-    [cocoaView ungrabMouse];
-    [cocoaView raiseAllKeys];
+    [activeView ungrabMouse];
+    [activeView raiseAllKeys];
 }
 
 /* We abstract the method called by the Enter Fullscreen menu item
@@ -1376,7 +1629,7 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (void)displayConsole:(id)sender
 {
     with_bql(^{
-        [cocoaView selectConsoleLocked:[sender tag]];
+        [activeView selectConsoleLocked:[sender tag]];
     });
 }
 
@@ -1583,7 +1836,28 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (void)sendEvent:(NSEvent *)event
 {
     COCOA_DEBUG("QemuApplication: sendEvent\n");
-    if (![cocoaView handleEvent:event]) {
+    if (split_console && [event window] == [cocoaView window] &&
+        [event type] == NSEventTypeLeftMouseDown) {
+        NSPoint point = [event locationInWindow];
+        QemuCocoaView *target = nil;
+        for (QemuCocoaView *view in consoleViews) {
+            if (NSPointInRect([view convertPoint:point fromView:nil],
+                              [view bounds])) {
+                target = view;
+                break;
+            }
+        }
+        if (target && target != activeView) {
+            [activeView ungrabMouse];
+            [activeView raiseAllKeys];
+            activeView = target;
+            for (QemuCocoaView *view in consoleViews) {
+                [[view layer] setBorderWidth:view == activeView ? 2 : 0];
+                [[view layer] setBorderColor:[[NSColor systemBlueColor] CGColor]];
+            }
+        }
+    }
+    if (![activeView handleEvent:event]) {
         [super sendEvent: event];
     }
 }
@@ -1899,17 +2173,27 @@ static int cocoa_main(void)
 static void cocoa_update(DisplayChangeListener *dcl,
                          int x, int y, int w, int h)
 {
+    QemuCocoaView *view = container_of(dcl, CocoaListener, dcl)->view;
+
     COCOA_DEBUG("qemu_cocoa: cocoa_update\n");
 
+    bool isText = !qemu_console_is_graphic(dcl->con);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSRect rect = NSMakeRect(x, [cocoaView gscreen].height - y - h, w, h);
-        [cocoaView setNeedsDisplayInRect:rect];
+        if (isText) {
+            /* Bitmap dirty rectangles are in VGA pixels, not font points. */
+            [view setNeedsDisplay:YES];
+        } else {
+            NSRect rect = NSMakeRect(x, [view gscreen].height - y - h, w, h);
+            [view setNeedsDisplayInRect:rect];
+        }
     });
 }
 
 static void cocoa_switch(DisplayChangeListener *dcl,
                          DisplaySurface *surface)
 {
+    QemuCocoaView *view = container_of(dcl, CocoaListener, dcl)->view;
+
     pixman_image_t *image = surface->image;
 
     COCOA_DEBUG("qemu_cocoa: cocoa_switch\n");
@@ -1921,7 +2205,7 @@ static void cocoa_switch(DisplayChangeListener *dcl,
     pixman_image_ref(image);
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [cocoaView switchSurface:image];
+        [view switchSurface:image];
     });
 }
 
@@ -1948,16 +2232,20 @@ static void cocoa_refresh(DisplayChangeListener *dcl)
 
 static void cocoa_mouse_set(DisplayChangeListener *dcl, int x, int y, bool on)
 {
+    QemuCocoaView *view = container_of(dcl, CocoaListener, dcl)->view;
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        [cocoaView setMouseX:x y:y on:on];
+        [view setMouseX:x y:y on:on];
     });
 }
 
 static void cocoa_cursor_define(DisplayChangeListener *dcl, QEMUCursor *cursor)
 {
+    QemuCocoaView *view = container_of(dcl, CocoaListener, dcl)->view;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         BQL_LOCK_GUARD();
-        [cocoaView setCursor:qemu_console_get_cursor(dcl->con)];
+        [view setCursor:qemu_console_get_cursor(dcl->con)];
     });
 }
 
@@ -1973,6 +2261,15 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
     TransformProcessType(&psn, kProcessTransformToForegroundApplication);
 
     [QemuApplication sharedApplication];
+
+    five_console = opts->u.cocoa.layout &&
+                   !strcmp(opts->u.cocoa.layout, "2+3");
+    if (opts->u.cocoa.layout && !five_console) {
+        error_report("cocoa layout must be 2+3");
+        exit(1);
+    }
+    split_console = five_console ||
+                    (opts->u.cocoa.has_split && opts->u.cocoa.split);
 
     // Create an Application controller
     QemuCocoaAppController *controller = [[QemuCocoaAppController alloc] init];
@@ -2016,9 +2313,59 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
     add_console_menu_entries();
     addRemovableDevicesMenuItems();
 
-    qemu_console_register_listener(qemu_console_lookup_default(),
-                                   &dcl, &dcl_ops);
-    kbd = qkbd_state_init(dcl.con);
+    QemuConsole *main_con = qemu_console_lookup_default();
+    QemuConsole *mcu_con = NULL;
+    if (split_console && !five_console) {
+        /* Prefer UART1, also accepting an explicitly named MCU chardev.
+         * Otherwise choose the first text console after the default.
+         * View menu selections apply to the focused pane.
+         */
+        for (unsigned int i = 0; ; i++) {
+            QemuConsole *con = qemu_console_lookup_by_index(i);
+            if (!con) {
+                break;
+            }
+            if (!qemu_console_is_graphic(con) && con != main_con) {
+                g_autofree char *label = qemu_console_get_label(con);
+                if (!mcu_con) {
+                    mcu_con = con;
+                }
+                if (label && (!strcmp(label, "serial1") ||
+                              !strcmp(label, "mcu"))) {
+                    mcu_con = con;
+                    break;
+                }
+            }
+        }
+        if (!mcu_con) {
+            error_report("cocoa split requires two distinct consoles");
+            exit(1);
+        }
+    }
+    if (!five_console) {
+        [cocoaView attachConsole:main_con];
+    }
+    if (five_console) {
+        unsigned pane = 0;
+        for (unsigned i = 0; pane < 5; i++) {
+            QemuConsole *con = qemu_console_lookup_by_index(i);
+            if (!con) {
+                error_report("cocoa layout=2+3 requires five text consoles");
+                exit(1);
+            }
+            if (qemu_console_is_graphic(con)) {
+                continue;
+            }
+            QemuCocoaView *view = [consoleViews objectAtIndex:pane++];
+            [view attachConsole:con];
+            [view notifyMouseModeChange];
+            [view updateUIInfo];
+        }
+    } else if (split_console) {
+        [secondaryView attachConsole:mcu_con];
+        [secondaryView notifyMouseModeChange];
+        [secondaryView updateUIInfo];
+    }
     qemu_add_mouse_mode_change_notifier(&mouse_mode_change_notifier);
     [cocoaView notifyMouseModeChange];
     [cocoaView updateUIInfo];
@@ -2026,6 +2373,7 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
     qemu_event_init(&cbevent, false);
     cbowner = [[QemuCocoaPasteboardTypeOwner alloc] init];
     qemu_clipboard_peer_register(&cbpeer);
+    cocoa_initialized = true;
 
     [pool release];
 
@@ -2038,12 +2386,14 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
 
 static void cocoa_display_cleanup(void)
 {
-    if (!kbd) {
+    if (!cocoa_initialized) {
         return;
     }
-
-    qemu_console_unregister_listener(&dcl);
-    g_clear_pointer(&kbd, qkbd_state_free);
+    cocoa_initialized = false;
+    [cocoaView detachConsole];
+    for (QemuCocoaView *view in consoleViews) {
+        [view detachConsole];
+    }
     qemu_remove_mouse_mode_change_notifier(&mouse_mode_change_notifier);
     qemu_clipboard_peer_unregister(&cbpeer);
     g_clear_pointer(&cbinfo, qemu_clipboard_info_unref);

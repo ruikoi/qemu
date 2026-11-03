@@ -1445,6 +1445,12 @@
 #     turned off the host window will be resized instead.  Defaults to
 #     "off".  (Since 8.2)
 #
+# @split: Display the default console and another text console
+#     side by side with independent input focus.  Defaults to "off".
+#
+# @layout: Use "2+3" for two text consoles on the left and three on
+#     the right, in text-console creation order.  Each accepts input.
+#
 # @zoom-interpolation: Apply interpolation to smooth output when
 #     zoom-to-fit is enabled.  Defaults to "off".  (Since 9.0)
 #
@@ -1456,7 +1462,9 @@
       '*full-grab': 'bool',
       '*swap-opt-cmd': 'bool',
       '*zoom-to-fit': 'bool',
-      '*zoom-interpolation': 'bool'
+      '*zoom-interpolation': 'bool',
+      '*split': 'bool',
+      '*layout': 'str'
   } }
 
 ##

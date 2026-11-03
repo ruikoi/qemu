@@ -2260,7 +2260,7 @@ DEF("display", HAS_ARG, QEMU_OPTION_display,
 #if defined(CONFIG_COCOA)
     "-display cocoa[,full-grab=on|off][,swap-opt-cmd=on|off]\n"
     "              [,show-cursor=on|off][,left-command-key=on|off]\n"
-    "              [,full-screen=on|off][,zoom-to-fit=on|off]\n"
+    "              [,full-screen=on|off][,zoom-to-fit=on|off][,split=on|off][,layout=2+3]\n"
 #endif
 #if defined(CONFIG_OPENGL)
     "-display egl-headless[,rendernode=<file>]\n"
@@ -2370,6 +2370,10 @@ SRST
         Display video output in a Cocoa window. Mac only. This interface
         provides drop-down menus and other UI elements to configure and
         control the VM during runtime. Valid parameters are:
+
+        ``split=on|off`` : Display two independently selectable console panes.
+
+        ``layout=2+3`` : Display five console panes in two columns.
 
         ``full-grab=on|off`` : Capture all key presses, including system combos.
                                This requires accessibility permissions, since it

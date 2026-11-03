@@ -87,6 +87,7 @@ void vt100_init(QemuVT100 *vt,
 void vt100_fini(QemuVT100 *vt);
 
 void vt100_update_cursor(void);
+bool vt100_cursor_visible(void);
 size_t vt100_input(QemuVT100 *vt, const uint8_t *buf, size_t len);
 void vt100_keysym(QemuVT100 *vt, int keysym);
 void vt100_set_image(QemuVT100 *vt, pixman_image_t *image);

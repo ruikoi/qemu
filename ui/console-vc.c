@@ -75,6 +75,48 @@ void qemu_text_console_handle_keysym(QemuTextConsole *s, int keysym)
     vt100_keysym(&s->vt, keysym);
 }
 
+QemuConsoleText *qemu_console_get_text(QemuConsole *con)
+{
+    QemuVT100 *vt;
+    QemuConsoleText *text;
+    int row, col;
+
+    if (!con || !QEMU_IS_TEXT_CONSOLE(con)) {
+        return NULL;
+    }
+    vt = &QEMU_TEXT_CONSOLE(con)->vt;
+    text = g_malloc0(sizeof(*text) +
+                     sizeof(text->cells[0]) * vt->width * vt->height);
+    text->width = vt->width;
+    text->height = vt->height;
+    text->cursor_x = MIN(vt->x, vt->width - 1);
+    text->cursor_y = (vt->y_base + vt->y - vt->y_displayed +
+                      vt->total_height) % vt->total_height;
+    text->blink_visible = vt100_cursor_visible();
+    text->cursor_visible = text->blink_visible &&
+                           text->cursor_y < vt->height;
+    for (row = 0; row < vt->height; row++) {
+        int source_row = (vt->y_displayed + row) % vt->total_height;
+
+        for (col = 0; col < vt->width; col++) {
+            TextCell *source = &vt->cells[source_row * vt->width + col];
+            TextAttributes a = source->t_attrib;
+            QemuConsoleTextCell *cell = &text->cells[row * vt->width + col];
+
+            cell->ch = source->ch;
+            cell->fg = a.fgcol;
+            cell->bg = a.bgcol;
+            cell->attributes =
+                (a.bold ? QEMU_CONSOLE_TEXT_BOLD : 0) |
+                (a.uline ? QEMU_CONSOLE_TEXT_UNDERLINE : 0) |
+                (a.blink ? QEMU_CONSOLE_TEXT_BLINK : 0) |
+                (a.invers ? QEMU_CONSOLE_TEXT_INVERSE : 0) |
+                (a.unvisible ? QEMU_CONSOLE_TEXT_INVISIBLE : 0);
+        }
+    }
+    return text;
+}
+
 static void text_console_update(void *opaque, uint32_t *chardata)
 {
     QemuTextConsole *s = QEMU_TEXT_CONSOLE(opaque);

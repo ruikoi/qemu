@@ -40,6 +40,26 @@
 #include "trace.h"
 #include "qom/object.h"
 
+static bool sdhci_version4_enabled(SDHCIState *s)
+{
+    return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4);
+}
+
+/* In version 4, offset 0x00 is the 32-bit block count, not SDMA address. */
+static uint32_t sdhci_block_count(SDHCIState *s)
+{
+    return sdhci_version4_enabled(s) ? s->sdmasysad : s->blkcnt;
+}
+
+static void sdhci_decrement_block_count(SDHCIState *s)
+{
+    if (sdhci_version4_enabled(s)) {
+        s->sdmasysad--;
+    } else {
+        s->blkcnt--;
+    }
+}
+
 #define TYPE_SDHCI_BUS "sdhci-bus"
 /* This is reusing the SDBus typedef from SD_BUS */
 DECLARE_INSTANCE_CHECKER(SDBus, SDHCI_BUS,
@@ -446,7 +466,7 @@ static void sdhci_read_block_from_card(SDHCIState *s)
     const uint16_t blk_size = s->blksize & BLOCK_SIZE_MASK;
 
     if ((s->trnmod & SDHC_TRNS_MULTI) &&
-            (s->trnmod & SDHC_TRNS_BLK_CNT_EN) && (s->blkcnt == 0)) {
+            (s->trnmod & SDHC_TRNS_BLK_CNT_EN) && (sdhci_block_count(s) == 0)) {
         return;
     }
 
@@ -472,7 +492,7 @@ static void sdhci_read_block_from_card(SDHCIState *s)
 
     /* Clear DAT line active status if that was the last block */
     if ((s->trnmod & SDHC_TRNS_MULTI) == 0 ||
-            ((s->trnmod & SDHC_TRNS_MULTI) && s->blkcnt == 1)) {
+            ((s->trnmod & SDHC_TRNS_MULTI) && sdhci_block_count(s) == 1)) {
         s->prnsts &= ~SDHC_DAT_LINE_ACTIVE;
     }
 
@@ -481,7 +501,7 @@ static void sdhci_read_block_from_card(SDHCIState *s)
      * data - generate Block Event interrupt
      */
     if (s->stopped_state == sdhc_gap_read && (s->trnmod & SDHC_TRNS_MULTI) &&
-            s->blkcnt != 1)    {
+            sdhci_block_count(s) != 1) {
         s->prnsts &= ~SDHC_DAT_LINE_ACTIVE;
         if (s->norintstsen & SDHC_EISEN_BLKGAP) {
             s->norintsts |= SDHC_EIS_BLKGAP;
@@ -515,12 +535,13 @@ static uint32_t sdhci_read_dataport(SDHCIState *s, unsigned size)
             s->data_count = 0;  /* next buff read must start at position [0] */
 
             if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
-                s->blkcnt--;
+                sdhci_decrement_block_count(s);
             }
 
             /* if that was the last block of data */
             if ((s->trnmod & SDHC_TRNS_MULTI) == 0 ||
-                ((s->trnmod & SDHC_TRNS_BLK_CNT_EN) && (s->blkcnt == 0)) ||
+                ((s->trnmod & SDHC_TRNS_BLK_CNT_EN) &&
+                 (sdhci_block_count(s) == 0)) ||
                  /* stop at gap request */
                 (s->stopped_state == sdhc_gap_read &&
                  !(s->prnsts & SDHC_DAT_LINE_ACTIVE))) {
@@ -547,10 +568,10 @@ static void sdhci_write_block_to_card(SDHCIState *s)
     }
 
     if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
-        if (s->blkcnt == 0) {
+        if (sdhci_block_count(s) == 0) {
             return;
         } else {
-            s->blkcnt--;
+            sdhci_decrement_block_count(s);
         }
     }
 
@@ -562,7 +583,8 @@ static void sdhci_write_block_to_card(SDHCIState *s)
     /* Finish transfer if that was the last block of data */
     if ((s->trnmod & SDHC_TRNS_MULTI) == 0 ||
             ((s->trnmod & SDHC_TRNS_MULTI) &&
-            (s->trnmod & SDHC_TRNS_BLK_CNT_EN) && (s->blkcnt == 0))) {
+            (s->trnmod & SDHC_TRNS_BLK_CNT_EN) &&
+             (sdhci_block_count(s) == 0))) {
         sdhci_end_transfer(s);
     } else if (s->norintstsen & SDHC_NISEN_WBUFRDY) {
         s->norintsts |= SDHC_NIS_WBUFRDY;
@@ -570,7 +592,7 @@ static void sdhci_write_block_to_card(SDHCIState *s)
 
     /* Generate Block Gap Event if requested and if not the last block */
     if (s->stopped_state == sdhc_gap_write && (s->trnmod & SDHC_TRNS_MULTI) &&
-            s->blkcnt > 0) {
+            sdhci_block_count(s) > 0) {
         s->prnsts &= ~SDHC_DOING_WRITE;
         if (s->norintstsen & SDHC_EISEN_BLKGAP) {
             s->norintsts |= SDHC_EIS_BLKGAP;
@@ -615,11 +637,6 @@ static void sdhci_write_dataport(SDHCIState *s, uint32_t value, unsigned size)
  * Single DMA data transfer
  */
 
-static bool sdhci_version4_enabled(SDHCIState *s)
-{
-    return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, VERSION4);
-}
-
 static bool sdhci_64bit_addressing_enabled(SDHCIState *s)
 {
     return FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, ADDRESSING_64);
@@ -660,7 +677,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     uint64_t sdma_address = sdhci_sdma_address(s);
     uint32_t boundary_count = boundary_chk - (sdma_address % boundary_chk);
 
-    if (!(s->trnmod & SDHC_TRNS_BLK_CNT_EN) || !s->blkcnt) {
+    if (!(s->trnmod & SDHC_TRNS_BLK_CNT_EN) || !sdhci_block_count(s)) {
         qemu_log_mask(LOG_UNIMP, "infinite transfer is not supported\n");
         return;
     }
@@ -677,7 +694,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
     s->prnsts |= SDHC_DATA_INHIBIT | SDHC_DAT_LINE_ACTIVE;
     if (s->trnmod & SDHC_TRNS_READ) {
         s->prnsts |= SDHC_DOING_READ;
-        while (s->blkcnt) {
+        while (sdhci_block_count(s)) {
             if (s->data_count == 0) {
                 sdbus_read_data(&s->sdbus, s->fifo_buffer, block_size);
             }
@@ -689,7 +706,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                 s->data_count = block_size;
                 boundary_count -= block_size - begin;
                 if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
-                    s->blkcnt--;
+                    sdhci_decrement_block_count(s);
                 }
             }
             dma_memory_write(s->dma_as, sdhci_sdma_address(s),
@@ -705,7 +722,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
         }
     } else {
         s->prnsts |= SDHC_DOING_WRITE;
-        while (s->blkcnt) {
+        while (sdhci_block_count(s)) {
             begin = s->data_count;
             if (((boundary_count + begin) < block_size) && page_aligned) {
                 s->data_count = boundary_count + begin;
@@ -722,7 +739,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                 sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                 s->data_count = 0;
                 if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
-                    s->blkcnt--;
+                    sdhci_decrement_block_count(s);
                 }
             }
             if (page_aligned && boundary_count == 0) {
@@ -735,7 +752,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
         s->norintsts |= SDHC_NIS_DMA;
     }
 
-    if (s->blkcnt == 0) {
+    if (sdhci_block_count(s) == 0) {
         sdhci_end_transfer(s);
     } else {
         s->sdma_boundary_paused = true;
@@ -759,7 +776,7 @@ static void sdhci_sdma_transfer_single_block(SDHCIState *s)
                         MEMTXATTRS_UNSPECIFIED);
         sdbus_write_data(&s->sdbus, s->fifo_buffer, datacnt);
     }
-    s->blkcnt--;
+    sdhci_decrement_block_count(s);
 
     if (s->norintstsen & SDHC_NISEN_DMA) {
         s->norintsts |= SDHC_NIS_DMA;
@@ -770,7 +787,7 @@ static void sdhci_sdma_transfer_single_block(SDHCIState *s)
 
 static void sdhci_sdma_transfer(SDHCIState *s)
 {
-    if ((s->blkcnt == 1) || !(s->trnmod & SDHC_TRNS_MULTI)) {
+    if ((sdhci_block_count(s) == 1) || !(s->trnmod & SDHC_TRNS_MULTI)) {
         sdhci_sdma_transfer_single_block(s);
     } else {
         sdhci_sdma_transfer_multi_blocks(s);
@@ -781,7 +798,7 @@ static bool sdhci_sdma_transfer_active(SDHCIState *s)
 {
     return TRANSFERRING_DATA(s->prnsts) &&
             (s->trnmod & SDHC_TRNS_DMA) &&
-            s->blkcnt &&
+            sdhci_block_count(s) &&
             (s->blksize & BLOCK_SIZE_MASK) &&
             SDHC_DMA_TYPE(s->hostctl1) == SDHC_CTRL_SDMA;
 }
@@ -859,7 +876,7 @@ static void sdhci_do_adma(SDHCIState *s)
     MemTxResult res = MEMTX_ERROR;
     int i;
 
-    if (s->trnmod & SDHC_TRNS_BLK_CNT_EN && !s->blkcnt) {
+    if (s->trnmod & SDHC_TRNS_BLK_CNT_EN && !sdhci_block_count(s)) {
         /* Stop Multiple Transfer */
         sdhci_end_transfer(s);
         return;
@@ -916,8 +933,8 @@ static void sdhci_do_adma(SDHCIState *s)
                     if (s->data_count == block_size) {
                         s->data_count = 0;
                         if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
-                            s->blkcnt--;
-                            if (s->blkcnt == 0) {
+                            sdhci_decrement_block_count(s);
+                            if (sdhci_block_count(s) == 0) {
                                 break;
                             }
                         }
@@ -946,8 +963,8 @@ static void sdhci_do_adma(SDHCIState *s)
                         sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                         s->data_count = 0;
                         if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
-                            s->blkcnt--;
-                            if (s->blkcnt == 0) {
+                            sdhci_decrement_block_count(s);
+                            if (sdhci_block_count(s) == 0) {
                                 break;
                             }
                         }
@@ -989,11 +1006,12 @@ static void sdhci_do_adma(SDHCIState *s)
 
         /* ADMA transfer terminates if blkcnt == 0 or by END attribute */
         if (((s->trnmod & SDHC_TRNS_BLK_CNT_EN) &&
-                    (s->blkcnt == 0)) || (dscr.attr & SDHC_ADMA_ATTR_END)) {
+             (sdhci_block_count(s) == 0)) ||
+            (dscr.attr & SDHC_ADMA_ATTR_END)) {
             trace_sdhci_adma_transfer_completed();
             if (length || ((dscr.attr & SDHC_ADMA_ATTR_END) &&
                 (s->trnmod & SDHC_TRNS_BLK_CNT_EN) &&
-                s->blkcnt != 0)) {
+                sdhci_block_count(s) != 0)) {
                 trace_sdhci_error("SD/MMC host ADMA length mismatch");
                 s->admaerr |= SDHC_ADMAERR_LENGTH_MISMATCH |
                         SDHC_ADMAERR_STATE_ST_TFR;

@@ -1,0 +1,57 @@
+.. SPDX-License-Identifier: GPL-2.0-or-later
+
+SG200X and Milk-V Duo boards
+===========================
+
+The experimental SG200X platform provides ``milkv-duo`` (CV1800B, 64 MiB),
+``milkv-duo256m`` (SG2002, 256 MiB) and ``milkv-duos`` (SG2000, 512 MiB).
+Build it using the opt-in ``multiarch-softmmu`` target described in
+``docs/system/multiarch.rst``.
+
+The main core is C906 by default. Duo256M and Duo S also accept
+``main-isa=arm64`` to select Cortex-A53 at machine creation. A separate C906
+firmware core has its own address space, timer, interrupt controller and UART.
+There is no runtime ISA switching.
+
+Direct boot
+-----------
+
+For an RV64 Linux Image, matching initramfs, OpenSBI dynamic firmware and a
+FreeRTOS ELF::
+
+  qemu-system-multiarch \
+    -M milkv-duos,main-isa=riscv64,rtos=freertos.elf \
+    -accel tcg,thread=multi -m 512M \
+    -bios fw_dynamic.bin -kernel Image -initrd rootfs.cpio.gz \
+    -append 'console=ttyS0,115200 earlycon=uart8250,mmio32,0x04140000 rdinit=/bin/sh' \
+    -display none -monitor none -serial stdio \
+    -serial tcp:127.0.0.1:54321,server=on,wait=off
+
+The second UART is available through ``nc 127.0.0.1 54321``. Cortex-A53 boot
+uses an ARM64 Image and does not use the RISC-V OpenSBI firmware.
+
+FIP/SD boot
+-----------
+
+``boot-mode=fip,fip=FILE`` preloads the supported non-secure FIP payloads,
+including OpenSBI and U-Boot. Supply an SD image with
+``-drive file=sd.img,if=sd,format=raw,snapshot=on``. An optional ``rtos=ELF``
+overrides the FIP's small-core payload without modifying the vendor FIP.
+
+This mode assumes early DDR/PLL initialization has completed. It does not
+validate full vendor ROM/FSBL, DDR training or secure boot. ROM-related test
+fixtures exercise only the implemented subset. Legacy vendor kernels may
+advertise RVV 0.7, which is not implemented; the documented Debian acceptance
+adjusts the loaded device tree in U-Boot RAM to scalar ``rv64imafdc``.
+
+Scope
+-----
+
+The platform models the boot-critical memory map, UARTs, interrupts, timers,
+GPIO, SPI, SDHCI and selected initialization registers. Register storage and
+boot compatibility do not establish full peripheral functionality. DMA,
+USB, networking and multimedia paths require their own implementation and
+acceptance. The legacy C906 MAEE/SMCIR subset is opt-in for this platform.
+
+Use ``ruikoi-labs/projects/qemu-sg200x`` for pinned system-image preparation,
+FreeRTOS builds, direct-boot tests and Debian SD/reset acceptance.

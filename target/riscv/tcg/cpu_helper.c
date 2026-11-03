@@ -1119,6 +1119,9 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
         }
     }
 
+    /* XTheadMae conflicts with Svpbmt/Svnapot; SG200X has neither. */
+    bool maee = first_stage && riscv_cpu_cfg(env)->sg200x_maee;
+    target_ulong mae_mask = maee ? 0xf000000000000000ULL : 0;
     bool pbmte = env->menvcfg & MENVCFG_PBMTE;
     bool svade = riscv_cpu_cfg(env)->ext_svade;
     bool svadu = riscv_cpu_cfg(env)->ext_svadu;
@@ -1214,14 +1217,14 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
         if (riscv_cpu_sxl(env) == MXL_RV32) {
             ppn = pte >> PTE_PPN_SHIFT;
         } else {
-            if (pte & PTE_RESERVED(svrsw60t59b)) {
+            if (pte & (PTE_RESERVED(svrsw60t59b) & ~mae_mask)) {
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: reserved bits set in PTE: "
                               "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",
                               __func__, pte_addr, pte);
                 return TRANSLATE_FAIL;
             }
 
-            if (!pbmte && (pte & PTE_PBMT)) {
+            if (!maee && !pbmte && (pte & PTE_PBMT)) {
                 /* Reserved without Svpbmt. */
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits set in PTE, "
                               "and Svpbmt extension is disabled: "
@@ -1241,7 +1244,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
              * case the page-fault is mandatory.  Make both cases consistent
              * by also page faulting here.
              */
-            if ((pte & PTE_PBMT) == PTE_PBMT) {
+            if (!maee && (pte & PTE_PBMT) == PTE_PBMT) {
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits 62 and 61 are "
                         "reserved but are set in PTE: "
                         "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",
@@ -1249,7 +1252,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                 return TRANSLATE_FAIL;
             }
 
-            if (!riscv_cpu_cfg(env)->ext_svnapot && (pte & PTE_N)) {
+            if (!maee && !riscv_cpu_cfg(env)->ext_svnapot && (pte & PTE_N)) {
                 /* Reserved without Svnapot extension */
                 qemu_log_mask(LOG_GUEST_ERROR, "%s: N bit set in PTE, "
                               "and Svnapot extension is disabled: "
@@ -1270,7 +1273,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
             goto leaf;
         }
 
-        if (pte & (PTE_D | PTE_A | PTE_U | PTE_ATTR)) {
+        if (pte & (PTE_D | PTE_A | PTE_U | (PTE_ATTR & ~mae_mask))) {
             /* D, A, and U bits are reserved in non-leaf/inner PTEs */
             qemu_log_mask(LOG_GUEST_ERROR, "%s: D, A, or U bits set in non-leaf PTE: "
                           "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",
@@ -1292,7 +1295,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
                       __func__, pte_addr, pte);
         return TRANSLATE_FAIL;
     }
-    if (!pbmte && (pte & PTE_PBMT)) {
+    if (!maee && !pbmte && (pte & PTE_PBMT)) {
         /* Reserved without Svpbmt. */
         qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits set in PTE, "
                       "and Svpbmt extension is disabled: "
@@ -1310,7 +1313,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
      *
      * Raise a fault if 62-61 (i.e. PTE_PBMT) are set.
      */
-    if ((pte & PTE_PBMT) == PTE_PBMT) {
+    if (!maee && (pte & PTE_PBMT) == PTE_PBMT) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: PBMT bits 62 and 61 are "
                       "reserved but are set in leaf PTE: "
                       "addr: 0x%" HWADDR_PRIx " pte: 0x" TARGET_FMT_lx "\n",

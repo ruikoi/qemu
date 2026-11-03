@@ -151,6 +151,8 @@ BOOL_FIELD(ext_xtheadmac)
 BOOL_FIELD(ext_xtheadmemidx)
 BOOL_FIELD(ext_xtheadmempair)
 BOOL_FIELD(ext_xtheadsync)
+/* Local SG200X C906 legacy page attributes; no cache timing model. */
+BOOL_FIELD(sg200x_maee)
 BOOL_FIELD(ext_XVentanaCondOps)
 BOOL_FIELD(ext_xmipscbop)
 BOOL_FIELD(ext_xmipscmov)

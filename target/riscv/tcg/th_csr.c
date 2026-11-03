@@ -23,6 +23,7 @@
 #include "cpu.h"
 #include "cpu_vendorid.h"
 #include "target/riscv/tcg/csr.h"
+#include "exec/cputlb.h"
 
 /* Extended M-mode control registers of T-Head */
 #define CSR_TH_MXSTATUS        0x7c0
@@ -124,8 +125,8 @@ static bool test_thead_mvendorid(RISCVCPU *cpu)
 static RISCVException read_th_mxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
-    /* We don't set MAEE here, because QEMU does not implement MAEE. */
-    *val = TH_MXSTATUS_UCME | TH_MXSTATUS_THEADISAEE;
+    *val = TH_MXSTATUS_UCME | TH_MXSTATUS_THEADISAEE |
+           (riscv_cpu_cfg(env)->sg200x_maee ? (1ULL << 21) : 0);
     return RISCV_EXCP_NONE;
 }
 
@@ -139,8 +140,19 @@ static RISCVException read_unimp_th_csr(CPURISCVState *env, int csrno,
 static RISCVException read_th_sxstatus(CPURISCVState *env, int csrno,
                                        target_ulong *val)
 {
-    /* We don't set MAEE here, because QEMU does not implement MAEE. */
-    *val = TH_SXSTATUS_UCME | TH_SXSTATUS_THEADISAEE;
+    *val = TH_SXSTATUS_UCME | TH_SXSTATUS_THEADISAEE |
+           (riscv_cpu_cfg(env)->sg200x_maee ? (1ULL << 21) : 0);
+    return RISCV_EXCP_NONE;
+}
+
+/* Legacy C906 Linux uses SMCIR instead of sfence.vma. */
+static RISCVException write_th_smcir(CPURISCVState *env, int csrno,
+                                    target_ulong val, uintptr_t ra)
+{
+    if (riscv_cpu_cfg(env)->sg200x_maee && (val & ((1U << 26) | (1U << 27)))) {
+        /* Flushing all is also valid for ASID invalidation in this subset. */
+        tlb_flush(env_cpu(env));
+    }
     return RISCV_EXCP_NONE;
 }
 
@@ -423,7 +435,7 @@ const RISCVCSR th_csr_list[] = {
     {
         .csrno = CSR_TH_SMCIR,
         .insertion_test = test_thead_mvendorid,
-        .csr_ops = { "th.smcir", smode, read_unimp_th_csr }
+        .csr_ops = { "th.smcir", smode, read_unimp_th_csr, write_th_smcir }
     },
     {
         .csrno = CSR_TH_FXCR,

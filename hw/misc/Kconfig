@@ -258,3 +258,8 @@ config XLNX_ZYNQ_DDRC
     bool
 
 source macio/Kconfig
+
+config CORAL_NPU
+    bool
+    default y
+    depends on PCI
